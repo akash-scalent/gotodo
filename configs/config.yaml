@@ -1,3 +1,10 @@
 server:
   loglevel: 'DEBUG'
   port: 8000
+database:
+  host: 'localhost'
+  user: 'sky'
+  password: 'scalent@postgres'
+  dbname: 'todo'
+  port: 5432
+  timezone: 'Asia/Kolkata'

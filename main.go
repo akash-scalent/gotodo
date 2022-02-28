@@ -1,47 +1,52 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
+	"os/signal"
+	"time"
 
 	"github.com/akash-scalent/gotodo/configs"
-	"github.com/rs/zerolog/log"
-	"gopkg.in/yaml.v2"
-
-	"github.com/rs/zerolog"
+	"github.com/akash-scalent/gotodo/logger"
+	"github.com/akash-scalent/gotodo/routes"
 )
 
-var Configuration = &configs.Configuration{}
-
 func main() {
-	logFile, err := os.OpenFile("todo.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatal().Err(err).Str("service", "logger").Msg("Error opening log file")
+	configs.InitializeConfiguration()
+	logger := logger.InitializeLogger()
+
+	s := http.Server{
+		Addr:         fmt.Sprintf(":%d", configs.Config.SPort), // configure the bind address
+		Handler:      *routes.NewRouter(logger).Handler,                        // set the default handler
+		ReadTimeout:  5 * time.Second,                         // max time to read request from the client
+		WriteTimeout: 10 * time.Second,                        // max time to write response to the client
+		IdleTimeout:  120 * time.Second,                       // max time for connections using TCP Keep-Alive
 	}
 
-	multi := zerolog.MultiLevelWriter(logFile, os.Stdout)
+	// start the server
+	go func() {
+		logger.Info().Msgf("Starting server on port %d", configs.Config.SPort)
 
-	logger := zerolog.New(multi).With().Timestamp().Logger()
+		err := s.ListenAndServe()
+		if err != nil {
+			logger.Fatal().Err(err).Msg("Error starting server")
+		}
+	}()
 
-	logger.Info().Msg("Logger started")
-	configFile, err := os.Open(filepath.Join("configs", "config.yaml"))
-	if err != nil {
-		logger.Fatal().Err(err).Str("service", "configuration").Msg("Error reading configurating file")
-	}
-	err = yaml.NewDecoder(configFile).Decode(Configuration)
-	configFile.Close()
-	if err != nil {
-		logger.Fatal().Err(err).Str("service", "configuration").Msg("Error unmarshalling YAML file")
-	}
+	// trap sigterm or interupt and gracefully shutdown the server
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, os.Kill)
 
-	// Set logger level from configuration file
+	// Block until a signal is received.
+	sig := <-c
+	logger.Info().Msgf("Got signal:%v", sig)
 
-	if loggerLevel, err := zerolog.ParseLevel(strings.ToLower(Configuration.LogLevel)); err != nil {
-		logger = logger.Level(zerolog.InfoLevel)
-	} else {
-		logger.Error().Err(err).Send()
-		logger = logger.Level(loggerLevel)
-	}
-	logger.Info().Str("service", "configuration").Interface("config", Configuration).Msg("Configuration")
+	// gracefully shutdown the server, waiting max 30 seconds for current operations to complete
+	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+	s.Shutdown(ctx)
+	logger.Info().Msg("shutting down")
+	os.Exit(0)
 }
